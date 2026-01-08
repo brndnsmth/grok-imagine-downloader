@@ -2,7 +2,7 @@
 
 A Chrome extension to download prompts and generated videos from Grok Imagine.
 
-> **Note:** This extension is designed for use on a **single Imagine favorite page**, not the overall Favorites listing page. Navigate into a specific favorite to use this extension.
+> **Note:** This extension only works on **individual Imagine post pages** (`grok.com/imagine/post/...`), not the main Favorites listing page.
 
 ---
 
@@ -27,13 +27,11 @@ A Chrome extension to download prompts and generated videos from Grok Imagine.
 ## Features
 - Detect prompts and generated videos from single Grok Imagine favorite page
 - **Batch download** - Automatically clicks through all thumbnails to collect all video URLs, if they exist
-- Download prompt text as a `.txt` file
-- Download all generated videos on a page
+- Download prompt text as a `.txt` file for each video
+- **SD + HD downloads** - Automatically downloads both standard and HD versions when available
 - Download all content on a page with a single click
+- **Upscale all videos** - Request HD upscale for all detected videos (refresh page to see results)
 - Files grouped by timestamp for easy organization
-
-## Coming Soon
-- Upscale video requests
 
 ---
 

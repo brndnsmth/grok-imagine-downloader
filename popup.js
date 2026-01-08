@@ -6,14 +6,19 @@ let currentTabUrl = null;
 const detectBtn = document.getElementById('detectBtn');
 const contentFound = document.getElementById('contentFound');
 const downloadSection = document.getElementById('downloadSection');
+const upscaleSection = document.getElementById('upscaleSection');
 const promptPreview = document.getElementById('promptPreview');
 const videoCount = document.getElementById('videoCount');
 const downloadAllBtn = document.getElementById('downloadAllBtn');
 const downloadPromptBtn = document.getElementById('downloadPromptBtn');
 const downloadVideosBtn = document.getElementById('downloadVideosBtn');
+const upscaleAllBtn = document.getElementById('upscaleAllBtn');
 const progress = document.getElementById('progress');
 const progressText = document.getElementById('progressText');
 const preview = document.getElementById('preview');
+
+// API endpoint for upscaling
+const UPSCALE_API = 'https://grok.com/rest/media/video/upscale';
 
 // Initialize
 document.addEventListener('DOMContentLoaded', init);
@@ -23,6 +28,7 @@ function init() {
   downloadAllBtn.addEventListener('click', () => downloadContent('all'));
   downloadPromptBtn.addEventListener('click', () => downloadContent('prompt'));
   downloadVideosBtn.addEventListener('click', () => downloadContent('videos'));
+  upscaleAllBtn.addEventListener('click', upscaleAllVideos);
 }
 
 async function detectContent() {
@@ -32,8 +38,8 @@ async function detectContent() {
     // Get the active tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    if (!tab.url?.includes('grok.com')) {
-      showProgress('Please navigate to a Grok Imagine page', 'error');
+    if (!tab.url?.match(/grok\.com\/imagine\/post\//)) {
+      showProgress('Please navigate to a Grok Imagine post page (grok.com/imagine/post/...)', 'error');
       return;
     }
 
@@ -68,7 +74,11 @@ async function detectContent() {
         const result = results[0].result;
         data.prompt = result.prompt;
         if (result.video) {
-          data.videos.push(result.video);
+          // Attach prompt to the video object for download
+          data.videos.push({
+            ...result.video,
+            prompt: result.prompt
+          });
         }
       }
     } else {
@@ -169,22 +179,36 @@ function getCurrentVideoAndPrompt() {
     }
   }
 
-  // Get current video URL
-  let videoEl = document.querySelector('video#sd-video[src*=".mp4"]');
-  if (!videoEl || !videoEl.src) {
-    videoEl = document.querySelector('video[src*="generated_video.mp4"]');
+  // Get SD video URL (standard definition)
+  let sdVideoEl = document.querySelector('video#sd-video[src*=".mp4"]');
+  if (!sdVideoEl || !sdVideoEl.src) {
+    sdVideoEl = document.querySelector('video[src*="generated_video.mp4"]');
+  }
+  if (!sdVideoEl || !sdVideoEl.src) {
+    // Try share-videos format (non-HD)
+    sdVideoEl = document.querySelector('video[src*="share-videos"][src$=".mp4"]:not([src*="_hd.mp4"])');
   }
 
-  if (videoEl && videoEl.src) {
+  // Get HD video URL if it exists
+  let hdVideoEl = document.querySelector('video#hd-video[src*=".mp4"]');
+  if (!hdVideoEl || !hdVideoEl.src) {
+    hdVideoEl = document.querySelector('video[src*="generated_video_hd.mp4"]');
+  }
+  if (!hdVideoEl || !hdVideoEl.src) {
+    hdVideoEl = document.querySelector('video[src*="_hd.mp4"]');
+  }
+
+  if (sdVideoEl && sdVideoEl.src) {
     // Extract video ID from URL
-    let match = videoEl.src.match(/\/generated\/([a-f0-9-]+)\//);
+    let match = sdVideoEl.src.match(/\/generated\/([a-f0-9-]+)\//);
     if (!match) {
-      match = videoEl.src.match(/share-videos\/([a-f0-9-]+)\.mp4/);
+      match = sdVideoEl.src.match(/share-videos\/([a-f0-9-]+)(?:_hd)?\.mp4/);
     }
 
     video = {
-      url: videoEl.src,
-      id: match ? match[1] : null
+      url: sdVideoEl.src,
+      id: match ? match[1] : null,
+      hdUrl: (hdVideoEl && hdVideoEl.src) ? hdVideoEl.src : null
     };
   }
 
@@ -247,11 +271,13 @@ function displayResults(data) {
   // Show sections
   contentFound.style.display = 'block';
   downloadSection.style.display = 'block';
+  upscaleSection.style.display = data.videos.length > 0 ? 'block' : 'none';
 
   // Enable/disable buttons based on content
   downloadPromptBtn.disabled = !data.prompt;
   downloadVideosBtn.disabled = data.videos.length === 0;
   downloadAllBtn.disabled = !data.prompt && data.videos.length === 0;
+  upscaleAllBtn.disabled = data.videos.length === 0;
 
   hideProgress();
 }
@@ -278,9 +304,10 @@ async function downloadContent(type) {
 
   // Count total downloads
   if (type === 'all' || type === 'videos') {
-    // Each video + its prompt (if it has one)
+    // Each video (SD + HD if exists) + its prompt (if it has one)
     extractedData.videos.forEach(video => {
-      totalDownloads++; // video
+      totalDownloads++; // SD video
+      if (video.hdUrl) totalDownloads++; // HD video if exists
       if (video.prompt) totalDownloads++; // prompt for this video
     });
   }
@@ -301,16 +328,29 @@ async function downloadContent(type) {
         const videoNum = String(i + 1).padStart(2, '0');
         const idSuffix = video.id ? `-${video.id.slice(0, 8)}` : '';
 
-        // Download video
-        const videoFilename = `${folder}${timestamp}-video-${videoNum}${idSuffix}.mp4`;
+        // Download SD video
+        const sdFilename = `${folder}${timestamp}-video-${videoNum}${idSuffix}.mp4`;
         await chrome.downloads.download({
           url: video.url,
-          filename: videoFilename,
+          filename: sdFilename,
           saveAs: false
         });
 
         downloadCount++;
-        showProgress(`Downloaded video ${i + 1} (${downloadCount}/${totalDownloads})`);
+        showProgress(`Downloaded SD video ${i + 1} (${downloadCount}/${totalDownloads})`);
+
+        // Download HD video if available
+        if (video.hdUrl) {
+          const hdFilename = `${folder}${timestamp}-video-${videoNum}${idSuffix}-HD.mp4`;
+          await chrome.downloads.download({
+            url: video.hdUrl,
+            filename: hdFilename,
+            saveAs: false
+          });
+
+          downloadCount++;
+          showProgress(`Downloaded HD video ${i + 1} (${downloadCount}/${totalDownloads})`);
+        }
 
         // Download prompt for this video (if available and type includes prompts)
         if ((type === 'all') && video.prompt) {
@@ -370,4 +410,89 @@ function showProgress(message, type = '') {
 function hideProgress() {
   progress.style.display = 'none';
   progressText.className = '';
+}
+
+/**
+ * Extracts video ID from video URL
+ * @param {string} videoUrl - The video URL
+ * @returns {string|null} - The video ID or null
+ */
+function extractVideoIdFromUrl(videoUrl) {
+  // URL format: https://assets.grok.com/users/{userId}/generated/{videoId}/generated_video.mp4
+  const match = videoUrl.match(/\/generated\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\//i);
+  return match ? match[1] : null;
+}
+
+/**
+ * Sends upscale request for a single video
+ * @param {string} videoId - The video ID to upscale
+ * @returns {Promise<boolean>} - True if successful
+ */
+async function upscaleVideo(videoId) {
+  try {
+    const response = await fetch(UPSCALE_API, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': '*/*',
+      },
+      credentials: 'include',
+      body: JSON.stringify({ videoId })
+    });
+
+    return response.ok;
+  } catch (error) {
+    console.error(`Failed to upscale video ${videoId}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Upscales all detected videos
+ */
+async function upscaleAllVideos() {
+  if (!extractedData || extractedData.videos.length === 0) {
+    showProgress('No videos to upscale. Please detect first.', 'error');
+    return;
+  }
+
+  const videos = extractedData.videos;
+  let successCount = 0;
+  let failCount = 0;
+  const STAGGER_DELAY = 300; // 300ms delay between requests
+
+  showProgress(`Starting upscale for ${videos.length} video(s)...`);
+
+  for (let i = 0; i < videos.length; i++) {
+    const video = videos[i];
+    const videoId = video.id || extractVideoIdFromUrl(video.url);
+
+    if (!videoId) {
+      failCount++;
+      console.log(`Could not extract video ID from: ${video.url}`);
+      continue;
+    }
+
+    showProgress(`Upscaling video ${i + 1}/${videos.length}...`);
+
+    const success = await upscaleVideo(videoId);
+    if (success) {
+      successCount++;
+      console.log(`Successfully requested upscale for video ${i + 1}: ${videoId}`);
+    } else {
+      failCount++;
+      console.log(`Failed to upscale video ${i + 1}: ${videoId}`);
+    }
+
+    // Stagger requests to avoid rate limiting
+    if (i < videos.length - 1) {
+      await new Promise(r => setTimeout(r, STAGGER_DELAY));
+    }
+  }
+
+  if (successCount > 0) {
+    showProgress(`✓ Upscale requested for ${successCount} video(s)${failCount > 0 ? `, ${failCount} failed` : ''}. Refresh page to see HD versions.`, 'success');
+  } else {
+    showProgress(`Failed to upscale videos. ${failCount} failed.`, 'error');
+  }
 }
