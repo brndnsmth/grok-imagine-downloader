@@ -63,8 +63,8 @@ async function detectContent() {
       sourceImage: null  // The original image all videos are based on
     };
 
-    if (thumbnailCount === 0) {
-      // No thumbnails, just get current video and prompt
+    if (thumbnailCount <= 1) {
+      // Single video (0 or 1 thumbnails), just get current video and prompt
       showProgress('Getting current video...');
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
