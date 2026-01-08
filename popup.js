@@ -1,0 +1,373 @@
+// State
+let extractedData = null;
+let currentTabUrl = null;
+
+// DOM Elements
+const detectBtn = document.getElementById('detectBtn');
+const contentFound = document.getElementById('contentFound');
+const downloadSection = document.getElementById('downloadSection');
+const promptPreview = document.getElementById('promptPreview');
+const videoCount = document.getElementById('videoCount');
+const downloadAllBtn = document.getElementById('downloadAllBtn');
+const downloadPromptBtn = document.getElementById('downloadPromptBtn');
+const downloadVideosBtn = document.getElementById('downloadVideosBtn');
+const progress = document.getElementById('progress');
+const progressText = document.getElementById('progressText');
+const preview = document.getElementById('preview');
+
+// Initialize
+document.addEventListener('DOMContentLoaded', init);
+
+function init() {
+  detectBtn.addEventListener('click', detectContent);
+  downloadAllBtn.addEventListener('click', () => downloadContent('all'));
+  downloadPromptBtn.addEventListener('click', () => downloadContent('prompt'));
+  downloadVideosBtn.addEventListener('click', () => downloadContent('videos'));
+}
+
+async function detectContent() {
+  showProgress('Detecting content...');
+
+  try {
+    // Get the active tab
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    if (!tab.url?.includes('grok.com')) {
+      showProgress('Please navigate to a Grok Imagine page', 'error');
+      return;
+    }
+
+    showProgress('Scanning page...');
+
+    // Step 1: Get thumbnail count
+    const initResults = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: getThumbnailCount
+    });
+
+    if (!initResults || !initResults[0]) {
+      showProgress('No content found on this page', 'error');
+      return;
+    }
+
+    const thumbnailCount = initResults[0].result || 0;
+    const data = {
+      prompt: null,  // Will store the first prompt for display
+      videos: []
+    };
+
+    if (thumbnailCount === 0) {
+      // No thumbnails, just get current video and prompt
+      showProgress('Getting current video...');
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: getCurrentVideoAndPrompt
+      });
+
+      if (results && results[0] && results[0].result) {
+        const result = results[0].result;
+        data.prompt = result.prompt;
+        if (result.video) {
+          data.videos.push(result.video);
+        }
+      }
+    } else {
+      // Click through each thumbnail and collect video + prompt
+      for (let i = 0; i < thumbnailCount; i++) {
+        showProgress(`Scanning video ${i + 1}/${thumbnailCount}...`);
+
+        // Click thumbnail at index i
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: clickThumbnailByIndex,
+          args: [i]
+        });
+
+        // Wait for content to load
+        await new Promise(r => setTimeout(r, 500));
+
+        // Get video and prompt for this thumbnail
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: getCurrentVideoAndPrompt
+        });
+
+        if (results && results[0] && results[0].result) {
+          const result = results[0].result;
+
+          // Store first prompt for display
+          if (!data.prompt && result.prompt) {
+            data.prompt = result.prompt;
+          }
+
+          // Add video with its prompt
+          if (result.video) {
+            // Check for duplicate URLs
+            const exists = data.videos.some(v => v.url === result.video.url);
+            if (!exists) {
+              data.videos.push({
+                ...result.video,
+                prompt: result.prompt
+              });
+            }
+          }
+        }
+      }
+    }
+
+    if (data.prompt || data.videos.length > 0) {
+      extractedData = data;
+      currentTabUrl = tab.url;
+      displayResults(data);
+    } else {
+      showProgress('No content found on this page', 'error');
+    }
+  } catch (error) {
+    console.error('Detection error:', error);
+    showProgress('Error detecting content: ' + error.message, 'error');
+  }
+}
+
+// Count thumbnail buttons (runs in page context)
+function getThumbnailCount() {
+  const thumbnailContainer = document.querySelector('.scrollbar-hide');
+  if (!thumbnailContainer) return 0;
+
+  const buttons = thumbnailContainer.querySelectorAll('button');
+  return buttons.length;
+}
+
+// Click a specific thumbnail by index (runs in page context)
+function clickThumbnailByIndex(index) {
+  const thumbnailContainer = document.querySelector('.scrollbar-hide');
+  if (!thumbnailContainer) return false;
+
+  const buttons = thumbnailContainer.querySelectorAll('button');
+  if (index < buttons.length) {
+    buttons[index].click();
+    return true;
+  }
+  return false;
+}
+
+// Get the currently displayed video and its prompt (runs in page context)
+function getCurrentVideoAndPrompt() {
+  let prompt = null;
+  let video = null;
+
+  // Get prompt from textarea
+  const textarea = document.querySelector('textarea[placeholder*="customize video"]');
+  if (textarea && textarea.value) {
+    prompt = textarea.value.trim();
+  }
+
+  // Fallback: Get prompt from main image alt text
+  if (!prompt) {
+    const mainImg = document.querySelector('img[alt][src*="imagine-public"], img[alt][src*="assets.grok.com"]');
+    if (mainImg && mainImg.alt && !mainImg.alt.startsWith('Thumbnail')) {
+      prompt = mainImg.alt.trim();
+    }
+  }
+
+  // Get current video URL
+  let videoEl = document.querySelector('video#sd-video[src*=".mp4"]');
+  if (!videoEl || !videoEl.src) {
+    videoEl = document.querySelector('video[src*="generated_video.mp4"]');
+  }
+
+  if (videoEl && videoEl.src) {
+    // Extract video ID from URL
+    let match = videoEl.src.match(/\/generated\/([a-f0-9-]+)\//);
+    if (!match) {
+      match = videoEl.src.match(/share-videos\/([a-f0-9-]+)\.mp4/);
+    }
+
+    video = {
+      url: videoEl.src,
+      id: match ? match[1] : null
+    };
+  }
+
+  return { prompt, video };
+}
+
+function displayResults(data) {
+  if (!data.prompt && data.videos.length === 0) {
+    showProgress('No prompt or videos found', 'error');
+    return;
+  }
+
+  // Update preview
+  if (data.prompt) {
+    const truncated = data.prompt.length > 100
+      ? data.prompt.substring(0, 100) + '...'
+      : data.prompt;
+    promptPreview.textContent = truncated;
+    promptPreview.title = data.prompt;
+  } else {
+    promptPreview.textContent = 'No prompt detected';
+  }
+
+  videoCount.textContent = `${data.videos.length} video(s) found`;
+
+  // Update preview area with video thumbnails
+  preview.innerHTML = '';
+  if (data.videos.length > 0) {
+    const thumbsDiv = document.createElement('div');
+    thumbsDiv.className = 'image-thumbs';
+
+    // Show video icon for each video
+    data.videos.slice(0, 4).forEach((video, idx) => {
+      const thumbDiv = document.createElement('div');
+      thumbDiv.className = 'video-thumb';
+      thumbDiv.innerHTML = `
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <path d="M7 3v18" />
+          <path d="M3 12h18" />
+          <path d="M17 3v18" />
+        </svg>
+        <span>${idx + 1}</span>
+      `;
+      thumbsDiv.appendChild(thumbDiv);
+    });
+
+    if (data.videos.length > 4) {
+      const moreDiv = document.createElement('div');
+      moreDiv.className = 'video-thumb more';
+      moreDiv.innerHTML = `<span>+${data.videos.length - 4}</span>`;
+      thumbsDiv.appendChild(moreDiv);
+    }
+
+    preview.appendChild(thumbsDiv);
+  } else {
+    preview.innerHTML = '<div class="preview-placeholder"><span>No videos to preview</span></div>';
+  }
+
+  // Show sections
+  contentFound.style.display = 'block';
+  downloadSection.style.display = 'block';
+
+  // Enable/disable buttons based on content
+  downloadPromptBtn.disabled = !data.prompt;
+  downloadVideosBtn.disabled = data.videos.length === 0;
+  downloadAllBtn.disabled = !data.prompt && data.videos.length === 0;
+
+  hideProgress();
+}
+
+// Extract imagine ID from Grok URL if available
+function getImagineId(url) {
+  if (!url) return null;
+  // Match patterns like /imagine/{id} or /i/{id}
+  const match = url.match(/grok\.com\/(?:imagine|i)\/([a-f0-9-]+)/);
+  return match ? match[1] : null;
+}
+
+async function downloadContent(type) {
+  if (!extractedData) {
+    showProgress('No content to download. Please detect first.', 'error');
+    return;
+  }
+
+  const imagineId = getImagineId(currentTabUrl);
+  const timestamp = Date.now();
+  const folder = imagineId ? `imagine/${imagineId}/` : `imagine/${timestamp}/`;
+  let downloadCount = 0;
+  let totalDownloads = 0;
+
+  // Count total downloads
+  if (type === 'all' || type === 'videos') {
+    // Each video + its prompt (if it has one)
+    extractedData.videos.forEach(video => {
+      totalDownloads++; // video
+      if (video.prompt) totalDownloads++; // prompt for this video
+    });
+  }
+  if (type === 'prompt') {
+    // Just count videos that have prompts
+    extractedData.videos.forEach(video => {
+      if (video.prompt) totalDownloads++;
+    });
+  }
+
+  showProgress(`Starting download (0/${totalDownloads})...`);
+
+  try {
+    // Download videos (and their prompts if type is 'all')
+    if ((type === 'all' || type === 'videos') && extractedData.videos.length > 0) {
+      for (let i = 0; i < extractedData.videos.length; i++) {
+        const video = extractedData.videos[i];
+        const videoNum = String(i + 1).padStart(2, '0');
+        const idSuffix = video.id ? `-${video.id.slice(0, 8)}` : '';
+
+        // Download video
+        const videoFilename = `${folder}${timestamp}-video-${videoNum}${idSuffix}.mp4`;
+        await chrome.downloads.download({
+          url: video.url,
+          filename: videoFilename,
+          saveAs: false
+        });
+
+        downloadCount++;
+        showProgress(`Downloaded video ${i + 1} (${downloadCount}/${totalDownloads})`);
+
+        // Download prompt for this video (if available and type includes prompts)
+        if ((type === 'all') && video.prompt) {
+          const promptBlob = new Blob([video.prompt], { type: 'text/plain' });
+          const promptUrl = URL.createObjectURL(promptBlob);
+          const promptFilename = `${folder}${timestamp}-video-${videoNum}${idSuffix}-prompt.txt`;
+
+          await chrome.downloads.download({
+            url: promptUrl,
+            filename: promptFilename,
+            saveAs: false
+          });
+
+          downloadCount++;
+          showProgress(`Downloaded prompt ${i + 1} (${downloadCount}/${totalDownloads})`);
+        }
+      }
+    }
+
+    // Download prompts only
+    if (type === 'prompt' && extractedData.videos.length > 0) {
+      for (let i = 0; i < extractedData.videos.length; i++) {
+        const video = extractedData.videos[i];
+        if (!video.prompt) continue;
+
+        const videoNum = String(i + 1).padStart(2, '0');
+        const idSuffix = video.id ? `-${video.id.slice(0, 8)}` : '';
+
+        const promptBlob = new Blob([video.prompt], { type: 'text/plain' });
+        const promptUrl = URL.createObjectURL(promptBlob);
+        const promptFilename = `${folder}${timestamp}-video-${videoNum}${idSuffix}-prompt.txt`;
+
+        await chrome.downloads.download({
+          url: promptUrl,
+          filename: promptFilename,
+          saveAs: false
+        });
+
+        downloadCount++;
+        showProgress(`Downloaded prompt ${i + 1} (${downloadCount}/${totalDownloads})`);
+      }
+    }
+
+    showProgress(`✓ Downloaded ${downloadCount} file(s)`, 'success');
+  } catch (error) {
+    console.error('Download error:', error);
+    showProgress('Error downloading: ' + error.message, 'error');
+  }
+}
+
+function showProgress(message, type = '') {
+  progress.style.display = 'block';
+  progressText.textContent = message;
+  progressText.className = type;
+}
+
+function hideProgress() {
+  progress.style.display = 'none';
+  progressText.className = '';
+}
