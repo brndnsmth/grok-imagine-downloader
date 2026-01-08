@@ -206,11 +206,19 @@ function getCurrentVideoAndPrompt() {
   }
 
   // Get source image URL (the original image all videos are based on)
-  // Look for img with /generated/{id}/image.jpg pattern (inside the grid with video)
+  // Two possible patterns:
+  // 1. assets.grok.com: /generated/{id}/image.jpg
+  // 2. imagine-public.x.ai: /share-images/{id}.jpg
   let sourceImage = null;
-  const sourceImgEl = document.querySelector('.grid img[src*="/generated/"][src$=".jpg"]:not([src*="preview_image"])');
+  let sourceImgEl = document.querySelector('.grid img[src*="/generated/"][src*="image.jpg"]');
+  if (!sourceImgEl) {
+    sourceImgEl = document.querySelector('.grid img[src*="share-images"]');
+  }
   if (sourceImgEl && sourceImgEl.src) {
-    const match = sourceImgEl.src.match(/\/generated\/([a-f0-9-]+)\/image\.(jpg|png)/i);
+    let match = sourceImgEl.src.match(/\/generated\/([a-f0-9-]+)\/image\.(jpg|png)/i);
+    if (!match) {
+      match = sourceImgEl.src.match(/share-images\/([a-f0-9-]+)\.(jpg|png)/i);
+    }
     sourceImage = {
       url: sourceImgEl.src.split('?')[0], // Remove cache param
       id: match ? match[1] : null
