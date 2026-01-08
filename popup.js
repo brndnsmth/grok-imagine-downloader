@@ -206,10 +206,11 @@ function getCurrentVideoAndPrompt() {
   }
 
   // Get source image URL (the original image all videos are based on)
+  // Look for img with /generated/{id}/image.jpg pattern (inside the grid with video)
   let sourceImage = null;
-  const sourceImgEl = document.querySelector('img[src*="share-images"]');
+  const sourceImgEl = document.querySelector('.grid img[src*="/generated/"][src$=".jpg"]:not([src*="preview_image"])');
   if (sourceImgEl && sourceImgEl.src) {
-    const match = sourceImgEl.src.match(/share-images\/([a-f0-9-]+)\.(jpg|png)/i);
+    const match = sourceImgEl.src.match(/\/generated\/([a-f0-9-]+)\/image\.(jpg|png)/i);
     sourceImage = {
       url: sourceImgEl.src.split('?')[0], // Remove cache param
       id: match ? match[1] : null
