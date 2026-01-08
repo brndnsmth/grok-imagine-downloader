@@ -59,7 +59,8 @@ async function detectContent() {
     const thumbnailCount = initResults[0].result || 0;
     const data = {
       prompt: null,  // Will store the first prompt for display
-      videos: []
+      videos: [],
+      sourceImage: null  // The original image all videos are based on
     };
 
     if (thumbnailCount === 0) {
@@ -73,6 +74,7 @@ async function detectContent() {
       if (results && results[0] && results[0].result) {
         const result = results[0].result;
         data.prompt = result.prompt;
+        data.sourceImage = result.sourceImage;
         if (result.video) {
           // Attach prompt to the video object for download
           data.videos.push({
@@ -108,6 +110,11 @@ async function detectContent() {
           // Store first prompt for display
           if (!data.prompt && result.prompt) {
             data.prompt = result.prompt;
+          }
+
+          // Store source image (only need it once, from first result)
+          if (!data.sourceImage && result.sourceImage) {
+            data.sourceImage = result.sourceImage;
           }
 
           // Add video with its prompt
@@ -198,6 +205,17 @@ function getCurrentVideoAndPrompt() {
     hdVideoEl = document.querySelector('video[src*="_hd.mp4"]');
   }
 
+  // Get source image URL (the original image all videos are based on)
+  let sourceImage = null;
+  const sourceImgEl = document.querySelector('img[src*="share-images"]');
+  if (sourceImgEl && sourceImgEl.src) {
+    const match = sourceImgEl.src.match(/share-images\/([a-f0-9-]+)\.(jpg|png)/i);
+    sourceImage = {
+      url: sourceImgEl.src.split('?')[0], // Remove cache param
+      id: match ? match[1] : null
+    };
+  }
+
   if (sdVideoEl && sdVideoEl.src) {
     // Extract video ID from URL
     let match = sdVideoEl.src.match(/\/generated\/([a-f0-9-]+)\//);
@@ -212,7 +230,7 @@ function getCurrentVideoAndPrompt() {
     };
   }
 
-  return { prompt, video };
+  return { prompt, video, sourceImage };
 }
 
 function displayResults(data) {
@@ -304,6 +322,8 @@ async function downloadContent(type) {
 
   // Count total downloads
   if (type === 'all' || type === 'videos') {
+    // Source image (downloaded once)
+    if (extractedData.sourceImage) totalDownloads++;
     // Each video (SD + HD if exists) + its prompt (if it has one)
     extractedData.videos.forEach(video => {
       totalDownloads++; // SD video
@@ -321,6 +341,23 @@ async function downloadContent(type) {
   showProgress(`Starting download (0/${totalDownloads})...`);
 
   try {
+    // Download source image first (the original image all videos are based on)
+    if ((type === 'all' || type === 'videos') && extractedData.sourceImage) {
+      const imgExt = extractedData.sourceImage.url.match(/\.(jpg|png)$/i)?.[1] || 'jpg';
+      const imgFilename = extractedData.sourceImage.id
+        ? `${folder}${timestamp}-source-${extractedData.sourceImage.id.slice(0, 8)}.${imgExt}`
+        : `${folder}${timestamp}-source.${imgExt}`;
+
+      await chrome.downloads.download({
+        url: extractedData.sourceImage.url,
+        filename: imgFilename,
+        saveAs: false
+      });
+
+      downloadCount++;
+      showProgress(`Downloaded source image (${downloadCount}/${totalDownloads})`);
+    }
+
     // Download videos (and their prompts if type is 'all')
     if ((type === 'all' || type === 'videos') && extractedData.videos.length > 0) {
       for (let i = 0; i < extractedData.videos.length; i++) {
@@ -491,7 +528,7 @@ async function upscaleAllVideos() {
   }
 
   if (successCount > 0) {
-    showProgress(`✓ Upscale requested for ${successCount} video(s)${failCount > 0 ? `, ${failCount} failed` : ''}. Refresh page to see HD versions.`, 'success');
+    showProgress(`✓ Upscale requested for ${successCount} video(s)${failCount > 0 ? `, ${failCount} failed` : ''}. Refresh page to see HD versions. May take a minute to see changes.`, 'success');
   } else {
     showProgress(`Failed to upscale videos. ${failCount} failed.`, 'error');
   }
