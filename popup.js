@@ -147,7 +147,12 @@ async function detectContent() {
 
 // Count thumbnail buttons (runs in page context)
 function getThumbnailCount() {
-  const thumbnailContainer = document.querySelector('.scrollbar-hide');
+  // Try multiple selectors for thumbnail container (Grok may change their structure)
+  let thumbnailContainer = document.querySelector('.scrollbar-hide');
+  if (!thumbnailContainer) {
+    // Fallback: look for snap-scroll container with thumbnail buttons
+    thumbnailContainer = document.querySelector('.snap-y.snap-mandatory');
+  }
   if (!thumbnailContainer) return 0;
 
   const buttons = thumbnailContainer.querySelectorAll('button');
@@ -156,7 +161,12 @@ function getThumbnailCount() {
 
 // Click a specific thumbnail by index (runs in page context)
 function clickThumbnailByIndex(index) {
-  const thumbnailContainer = document.querySelector('.scrollbar-hide');
+  // Try multiple selectors for thumbnail container (Grok may change their structure)
+  let thumbnailContainer = document.querySelector('.scrollbar-hide');
+  if (!thumbnailContainer) {
+    // Fallback: look for snap-scroll container with thumbnail buttons
+    thumbnailContainer = document.querySelector('.snap-y.snap-mandatory');
+  }
   if (!thumbnailContainer) return false;
 
   const buttons = thumbnailContainer.querySelectorAll('button');
